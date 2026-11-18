@@ -1,6 +1,8 @@
+import os
 import time
 import asyncio
 import threading
+import aiohttp
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from ats_fetchers import poll_all_ats, poll_portals
 from analyzer import (
@@ -17,11 +19,9 @@ class DummyHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Oracle HCM Radar is active 24/7!")
 
 def run_dummy_server():
-    server = HTTPServer(('0.0.0.0', 10000), DummyHandler)
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), DummyHandler)
     server.serve_forever()
-
-# Start dummy server in a background thread so it doesn't block the job radar loop
-threading.Thread(target=run_dummy_server, daemon=True).start()
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
@@ -42,7 +42,10 @@ async def poll_telegram_commands(session):
         async with session.get(f"{TELEGRAM_API_URL}/getUpdates?offset=-1") as resp:
             data = await resp.json()
             if data.get("ok") and data.get("result"):
-                update = data["result"][0]
+                updates = data["result"]
+                if not updates:
+                    return
+                update = updates[0]
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 if text.strip() == "/trends":
@@ -112,4 +115,8 @@ async def job_hunter_loop():
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
+    # Start the dummy web server in a background thread once
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
+    # Run the main job radar loop
     asyncio.run(job_hunter_loop())
