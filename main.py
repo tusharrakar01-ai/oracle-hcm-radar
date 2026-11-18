@@ -111,5 +111,5 @@ async def job_hunter_loop():
             # Sleep for 60 seconds before next sweep cycle
             await asyncio.sleep(60)
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     asyncio.run(job_hunter_loop())
