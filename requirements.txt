@@ -1,0 +1,5 @@
+aiohttp
+python-jobspy
+google-genai
+pandas
+pip-system-certs
