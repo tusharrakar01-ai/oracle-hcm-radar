@@ -1,5 +1,8 @@
 import asyncio
 import aiohttp
+import urllib.parse
+import xml.etree.ElementTree as ET
+import hashlib
 from jobspy import scrape_jobs
 from config import (
     GREENHOUSE_BOARDS, LEVER_BOARDS, SMARTRECRUITERS_BOARDS,
@@ -204,3 +207,46 @@ def _scrape_portals_sync():
 
 async def poll_portals():
     return await asyncio.to_thread(_scrape_portals_sync)
+
+async def poll_linkedin_posts():
+    """Safely catches public LinkedIn recruiter feed posts via Google RSS X-Ray."""
+    queries = [
+        'site:linkedin.com/posts ("Oracle HCM" OR "Oracle Fusion HCM") ("Hiring" OR "Urgent" OR "Opening") ("Pune" OR "Bangalore" OR "Hyderabad" OR "Mumbai" OR "Remote" OR "India") when:7d',
+        'site:linkedin.com/posts ("Core HR" OR "Absence Management") "Oracle" ("Hiring" OR "Immediate") "India" when:7d'
+    ]
+    
+    found_posts = []
+    headers = {"User-Agent": "Mozilla/5.0"}
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for q in queries:
+            encoded_q = urllib.parse.quote(q)
+            rss_url = f"https://news.google.com/rss/search?q={encoded_q}&hl=en-IN&gl=IN&ceid=IN:en"
+            try:
+                async with session.get(rss_url, timeout=15) as resp:
+                    if resp.status == 200:
+                        xml_text = await resp.text()
+                        root = ET.fromstring(xml_text)
+                        
+                        for item in root.findall(".//item")[:10]:
+                            title = item.find("title").text if item.find("title") is not None else "LinkedIn Recruiter Post"
+                            link = item.find("link").text if item.find("link") is not None else ""
+                            
+                            # Skip senior/architect roles using EXCLUDE_KEYWORDS
+                            title_lower = title.lower()
+                            if any(ex in title_lower for ex in EXCLUDE_KEYWORDS):
+                                continue
+                                
+                            job_id = hashlib.md5(link.encode()).hexdigest()
+                            found_posts.append({
+                                "id": f"li_xray_{job_id}",
+                                "company": "LinkedIn Recruiter Post",
+                                "title": title.replace(" - LinkedIn", ""),
+                                "location": "India / Hybrid / Remote",
+                                "url": link,
+                                "source": "LinkedIn Feed (X-Ray)"
+                            })
+            except Exception as e:
+                print(f"LinkedIn X-Ray poll error: {e}")
+                
+    return found_posts

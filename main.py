@@ -4,19 +4,23 @@ import asyncio
 import threading
 import aiohttp
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from ats_fetchers import poll_all_ats, poll_portals
+from ats_fetchers import poll_all_ats, poll_portals, poll_linkedin_posts
 from analyzer import (
     is_new_job, save_job, get_company_trend, 
     build_xray_links, generate_ai_pitch, get_market_trends_report
 )
 from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
-# 1. Dummy HTTP Server to satisfy Render's Free Web Service port binding requirement
+# 1. Dummy HTTP Server to satisfy Render & UptimeRobot
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Oracle HCM Radar is active 24/7!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 10000))
@@ -47,10 +51,19 @@ async def poll_telegram_commands(session):
                     return
                 update = updates[0]
                 msg = update.get("message", {})
-                text = msg.get("text", "")
-                if text.strip() == "/trends":
+                text = msg.get("text", "").strip()
+                
+                if text == "/trends":
                     report = get_market_trends_report()
                     await send_telegram_message(session, report)
+                elif text == "/linkedin":
+                    li_url = 'https://www.linkedin.com/search/results/content/?keywords=%22Oracle%20HCM%22%20AND%20(%22Hiring%22%20OR%20%22Opening%22)&datePosted=%22past-24h%22&sortBy=%22date_posted%22'
+                    msg_text = (
+                        "🔍 <b>Real-Time LinkedIn Feed Sweep (Last 24h)</b>\n\n"
+                        "Tap below to open your LinkedIn app directly to fresh recruiter posts sorted newest-first:\n\n"
+                        f"👉 <a href='{li_url}'>Open Latest Oracle HCM Feed Posts</a>"
+                    )
+                    await send_telegram_message(session, msg_text)
     except Exception:
         pass
 
@@ -58,18 +71,22 @@ async def job_hunter_loop():
     print("🚀 Oracle HCM Radar 24/7 Cloud Bot Started...")
     
     async with aiohttp.ClientSession() as session:
-        # Send startup notification
-        await send_telegram_message(session, "🟢 <b>Oracle HCM Radar Deployed Successfully!</b>\n\nCloud monitoring for Workday, Greenhouse, Lever, and Portal sweeps is now active 24/7.")
+        await send_telegram_message(
+            session, 
+            "🟢 <b>Oracle HCM Radar Updated & Deployed!</b>\n\n"
+            "Now scanning Workday, Greenhouse, Lever, SmartRecruiters, ORC, Portals & LinkedIn Recruiter Posts 24/7.\n"
+            "Commands: /trends | /linkedin"
+        )
         
         while True:
             try:
-                # Check for any telegram commands like /trends
                 await poll_telegram_commands(session)
                 
-                # Fetch live jobs from direct ATS and portals
+                # Fetch live jobs from direct ATS, portals, and LinkedIn X-Ray
                 ats_jobs = await poll_all_ats()
                 portal_jobs = await poll_portals()
-                all_jobs = ats_jobs + portal_jobs
+                li_posts = await poll_linkedin_posts()
+                all_jobs = ats_jobs + portal_jobs + li_posts
                 
                 new_jobs = [j for j in all_jobs if is_new_job(j["id"])]
                 
@@ -93,7 +110,7 @@ async def job_hunter_loop():
                         f"📍 <b>Location:</b> {location}\n"
                         f"🔍 <b>Source:</b> {source}\n\n"
                         f"💡 <b>Tailored Outreach Pitch:</b>\n<i>\"{pitch}\"</i>\n\n"
-                        f"🔗 <a href='{url}'>Apply Directly on Career Portal</a>"
+                        f"🔗 <a href='{url}'>Apply / View Post Directly</a>"
                     )
                     
                     keyboard = {
@@ -106,17 +123,13 @@ async def job_hunter_loop():
                     }
                     
                     await send_telegram_message(session, message, reply_markup=keyboard)
-                    await asyncio.sleep(1.5) # Prevent Telegram rate limits
+                    await asyncio.sleep(1.5)
                     
             except Exception as e:
                 print(f"Loop error: {e}")
                 
-            # Sleep for 60 seconds before next sweep cycle
             await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    # Start the dummy web server in a background thread once
     threading.Thread(target=run_dummy_server, daemon=True).start()
-    
-    # Run the main job radar loop
     asyncio.run(job_hunter_loop())
